@@ -1,0 +1,247 @@
+---
+title: "MIS 431 Summer 2023 Final Project"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+Patrick Doyne
+
+
+```{r warning = FALSE, message = FALSE}
+# Suppress dplyr summarise grouping warning messages
+options(dplyr.summarise.inform = FALSE)
+
+## Add R libraries here
+library(tidyverse)
+library(tidymodels)
+library(vip)
+library(dplyr)
+library(discrim)
+library(klaR)
+library(tidyverse)
+
+# Load data
+loans_df <- read_rds("C:/Users/doyne/Downloads/loan_data(1).rds")
+
+#Split data
+set.seed(345)
+loan_split <- initial_split(loans_df, prop = 0.75,
+strata = loan_default)
+# Training set
+loan_training <- loan_split %>% training()
+# Testing Set
+loan_test <- loan_split %>% testing()
+
+#Creating a recipe
+loan_recipe <- recipe(loan_default ~ ., data = loan_training) %>%
+step_YeoJohnson(all_numeric(), -all_outcomes()) %>%
+step_normalize(all_numeric(), -all_outcomes()) %>%
+step_dummy(all_nominal(), -all_outcomes())
+#Train data quick view
+loan_recipe %>%
+prep() %>%
+bake(new_data = loan_training)
+
+```
+
+
+# Data Analysis 
+
+
+
+## Question 1
+
+
+**Question**: Is there a difference in rate of defaulting on payments based on the amount of the loan and the term it is to be paid in?
+
+**Answer**: The amount the loan is for seems to not be a major factor. In fact, the average loan amounts were larger for those who did not default in both the 3 and 5 year loans. However, the term of the loan is important. Nearly 55% of the defaulted loans were 5 year terms while the other 45% was the 3 year term. This shows you are having a problem with your 5 year term loans. Furthermore, only around 27% of people who took out a 3 year loan defaulted, while on the other hand, close to 55% of those whom took out a 5 year loan defaulted. This shows there is an issue with the 5 year loans being given. 
+
+
+```{r}
+
+loans_df%>%
+  group_by(loan_default, term)%>%
+  summarize(avf_loan_amount= mean(loan_amount), count = n())
+
+ggplot(loans_df, aes( x = loan_amount, color = loan_default))+
+  geom_histogram()+
+  facet_wrap(~term)+
+    labs(title="Loan Term and Amount vs Defaulting", y ="Defaulted",x="Amount of Loan")
+
+```
+
+
+
+## Question 2
+
+
+**Question**: How does previous bankruptcy affect the rates of loan defaulting?
+
+
+
+**Answer**: Of the 1530 people that did default, around 13% have had a past bankruptcy in comparison to 11% of the other 2580 people who did not default, but do have a past bankruptcy. Roughly 42% of those with a history of bankruptcy defaulted. Further more, only about 37% of people who never had bankruptcy defaulted. There is a clear increase in rates of defaulting for those with a history of bankruptcy, however, with that said, it is still a mild difference.
+
+
+```{r}
+loans_df%>%
+  group_by(loan_default, history_bankruptcy)%>%
+  summarize(count = n())
+
+```
+
+## Question 3
+
+
+**Question**: Are the people with higher installment amounts defaulting on their payments more frequently than those with lower rates? Does this vary among loan purpose?
+
+
+**Answer**: It does appear that both the installment amount and the reason for the loan greatly affect weather a person defaults on their loan. For debt consolidation 25% defaulted and the average payment for those who defaulted was 16% higher. For credit card debt 54% of people defaulted and the average payment for those who defaulted was 15% higher. For medical assistance loans 52% defaulted and their average payment was around 11%. Small business loans saw a total of 26% defaulting and those who did had an average payment that was 23% higher. Lastly, those who took out a loan for home improvement had a total of 28% that defaulted, and had an average payment that was 18% higher. In every category of loan those who defaulted had higher average payments and they were all above 500$ on average. Additionally, credit card debt and medical loans had 2x the amount people defaulting in comparison to the other 3 categories.
+
+
+```{r}
+loans_df%>%
+  group_by(loan_default, loan_purpose)%>%
+  summarize(defaulted = n(), mean_installment = mean(installment))
+
+ggplot(loans_df, aes( x = loan_default, y = installment, color = loan_default))+
+  geom_boxplot()+
+  facet_wrap(~loan_purpose)+
+  labs(title="Loan Type and Installment vs Defaulting", y ="Installment",x="Defaulted")
+  
+
+```
+
+# Predictive Modeling 
+
+## Model 1
+
+```{r}
+#Model 1
+logistic_model <- logistic_reg() %>%
+set_engine("glm") %>%
+set_mode("classification")
+
+#Workflow 1
+loan_log_wf <- workflow() %>%
+add_model(logistic_model) %>%
+add_recipe(loan_recipe)
+
+#Fit 1
+loan_log_fit <- loan_log_wf%>%
+  fit(loan_training)
+
+# Extract trained model from workflow fit and view it 1
+loan_trained_model_log <- loan_log_fit %>%
+pull_workflow_fit()
+loan_trained_model_log
+
+# variable importance 1
+vip(loan_trained_model_log)
+
+#MODEL ONE IS MADE THIS IS PREIDCTIONS FOR MODEL 1
+
+# Automate the metrics process 1
+last_fit_model_log <- loan_log_wf %>%
+last_fit(split = loan_split)
+
+# Obtain data frame with predictions 1
+last_fit_results_log <- last_fit_model_log %>%
+collect_predictions()
+last_fit_results_log
+
+# Accuracy and Area under ROC(table) 1
+last_fit_model_log %>% collect_metrics()
+
+# Use dataframe to get the ROC Curve 1
+last_fit_results_log %>%
+roc_curve(truth = loan_default,  .pred_yes) %>%
+autoplot()
+
+
+
+```
+
+
+
+## Model 2
+
+```{r}
+#Model 2 
+lda_model <- discrim_regularized(frac_common_cov = 1) %>%
+set_engine('klaR') %>%
+set_mode('classification')
+
+#Workflow 2
+lda_wf <- workflow() %>%
+add_model(lda_model) %>%
+add_recipe(loan_recipe)
+
+#Fit 2
+loan_lda_fit <- lda_wf%>%
+  fit(loan_training)
+
+# Extract trained model from workflow fit and view it 2
+loan_trained_model_lda <- loan_lda_fit %>%
+pull_workflow_fit()
+loan_trained_model_lda
+
+#Train and evaluate with last_fit() 2
+last_fit_lda <- lda_wf %>%
+last_fit(split = loan_split)
+
+#Estimated Probablities 2
+lda_predictions <- last_fit_lda %>%
+collect_predictions()
+
+# Accuracy and Area under the ROC curve 2
+last_fit_lda %>% collect_metrics()
+
+# ROC Curve 2
+lda_predictions %>%
+roc_curve(truth = loan_default, .pred_yes) %>%
+autoplot()
+
+
+```
+
+
+
+# Summary of Results 
+
+## Introduction:
+
+When it comes to losing money, it's simply something a successful business cannot afford to have happen. Much less with the banks record levels of customers defaulting on their loans in the past couple of years. I will be exploring the factors that lead to loan default and develop a machine learning algorithm that can predict the likelihood of an applicant defaulting on their loan in the future. This will allow your bank to flourish financially, and help pull it up by its bootstraps after the last several years of less than satisfactory performance. Three main questions being asked in this analysis include: Is there a difference in rate of defaulting on payments based on the amount of the loan and the term it is to be paid in? How does previous bankruptcy affect the rates of loan defaulting? And are the people with higher installment amounts defaulting on their payments more frequently than those with lower rates? Does this vary among loan purposes? This will allow us to explore the important factors that are adversely affecting the bank's success in different areas, and give us a starting point with things to change, while the machine learning algorithm helps prevent any further defaults with your current setup. The data set being used contains information on over 3,500 individuals who secured a personal loan in 2017 from a national bank.
+
+## Highlights and Key Findings:
+
+Q1) There is a clear increase in rates of defaulting for those with a history of bankruptcy, however, with that said, it is still a mild difference.
+
+Q2) This shows there is an issue with the 5 year loans being given.
+
+Q3) In every category of loan those who defaulted had higher average payments and they were all above 500$ on average. Additionally, credit card debt and medical loans had 2x the amount people defaulting in comparison to the other 3 categories.
+
+## Recommendations Based Off Key Findings:
+
+Q1)  I strongly recommend reducing or doing away with your 5 year loans. 
+Reason:  Over half of those who take one out default on their payment at some point. This means you have a coin flip chance of losing the money attached to any 5 year loan you give out. Additionally, you are losing twice as many loans when compared to the 3 year loans, and the 5 year loans are typically worth around 50% more as well. Losing twice as many loans that are each worth 50% more is not good for business. This needs to change as soon as possible. 
+Q2)  I would recommend the company to add slightly harsher penalties to those who have a proven past of financial irresponsibility, and to be more cautious of the situation surrounding these loan applicants. Perhaps flagging the application and putting it through a more rigorous financial screening process to ensure they have no other obligations. 
+Reason: Reduces the risk of loss for the company. It allows the company to have more confidence in giving out loans to those with a history of defaulting, which totals around 10% of your overall business. This is a large chunk and is something that should not be taken lightly.
+Q3) I would recommend a few things:
+ One, I would recommend reducing the amount of loans that will have installments higher than 500.
+Reason: The data shows every single category of loan purpose those who defaulted had an average payment of well over 500, while on the other hand, for those who did not default they had an average of closer to 450. This will reduce the amount of people who struggle to make monthly payments and in turn will enable them to pay you back faster and more consistently.
+Secondly, reduce the amount of credit card and medical loans you are giving out, maybe even all together. 
+Reason: They are your biggest risks when looking at reasons for loans. Not to mention credit card debt and medical expenses do not always have a foreseeable end, meaning the situation can get much worse for the person you have loaned the money to. This ultimately hurts the company as they cannot pay you back as fast, if at all. 
+Lastly, never under any circumstance give out a loan with an installment of over 1200.
+Reason: The data shows about 1 percent of people who receive them are able to finish paying it back without defaulting. This is unnecessary risk for the bank.
+
+## Best Model?
+
+Both of the models we created were extremely accurate, however, the logistic model is deemed superior by a small margin. Looking at the accuracy of each model we see that in the logistic regression model we have an estimated score of 95.2%, while the LGA model scored in at 94.9%. Furthermore, this can be determined through using an ROC curve and measuring the area underneath it. In terms of model performance, an area under the ROC value between 0.9 - 1 indicates an “A”, 0.8 - 0.9 a “B”, and so forth. Anything below a 0.6 is an “F” and indicates poor model performance. You can think of it like a letter grade for the model. The logistic regression model scored an amazing 0.989 while the LGA model scored a 0.987. While both models perform extremely well, the logistic regression shows to be a better model and have a higher rate of accuracy. Additionally, it is important to note, of all the variables/factors in this data set, a few ranked with a much higher importance than the others: 5 year loans, installments, loan amount, interest rate, and purpose for loan (medical and credit card). This is useful information because you can further target these areas, improving performance in these areas will likely also improve the model, as seen in the recommendation section.
+
+## Conclusion:
+
+In conclusion, there is a clear issue with the 5 year loans being given, the average installments needs to be less to keep people from defaulting, you need to look into changing or eliminating loans for credit cards and medical expenses, and you need to be more vigilant when it comes to applications of those with a history of bankruptcy. Additionally, the best model to use going forward, for predicting an applicant's likelihood to default on a potential loan, is the logistic regression model.
+
+--------------------
+
